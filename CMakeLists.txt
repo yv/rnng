@@ -22,6 +22,8 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 
 #configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h)
 
+include( UseCython )
+
 add_subdirectory(cnn/cnn)
 add_subdirectory(nt-parser)
 # add_subdirectory(cnn/examples)

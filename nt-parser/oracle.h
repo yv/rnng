@@ -19,12 +19,10 @@ struct Sentence {
 
 // base class for transition based parse oracles
 struct Oracle {
+  RNNGrammar *gram;
+Oracle(RNNGrammar *g) : gram(g), sents() {}
   virtual ~Oracle();
-  Oracle(cnn::Dict* dict, cnn::Dict* adict, cnn::Dict* pdict) : d(dict), ad(adict), pd(pdict), sents() {}
   unsigned size() const { return sents.size(); }
-  cnn::Dict* d;  // dictionary of terminal symbols
-  cnn::Dict* ad; // dictionary of action types
-  cnn::Dict* pd; // dictionary of POS tags (preterminal symbols)
   std::string devdata;
   std::vector<Sentence> sents;
   std::vector<std::vector<int>> actions;
@@ -39,14 +37,13 @@ struct Oracle {
 // tokens with OOVs replaced
 class TopDownOracle : public Oracle {
  public:
-  TopDownOracle(cnn::Dict* termdict, cnn::Dict* adict, cnn::Dict* pdict, cnn::Dict* nontermdict) :
-      Oracle(termdict, adict, pdict), nd(nontermdict) {}
+  TopDownOracle(RNNGrammar *gram) :
+      Oracle(gram) {}
   // if is_training is true, then both the "raw" tokens and the mapped tokens
   // will be read, and both will be available. if false, then only the mapped
   // tokens will be available
   void load_bdata(const std::string& file);
   void load_oracle(const std::string& file, bool is_training);
-  cnn::Dict* nd; // dictionary of nonterminal types
 };
 
 // oracle that predicts nonterminal symbols with a NT(X) action
@@ -56,18 +53,16 @@ class TopDownOracle : public Oracle {
 // tokens with OOVs replaced
 class TopDownOracleGen : public Oracle {
  public:
-  TopDownOracleGen(cnn::Dict* termdict, cnn::Dict* adict, cnn::Dict* pdict, cnn::Dict* nontermdict) :
-      Oracle(termdict, adict, pdict), nd(nontermdict) {}
+  TopDownOracleGen(RNNGrammar *gram) :
+      Oracle(gram) {}
   void load_oracle(const std::string& file);
-  cnn::Dict* nd; // dictionary of nonterminal types
 };
 
 class TopDownOracleGen2 : public Oracle {
  public:
-  TopDownOracleGen2(cnn::Dict* termdict, cnn::Dict* adict, cnn::Dict* pdict, cnn::Dict* nontermdict) :
-      Oracle(termdict, adict, pdict), nd(nontermdict) {}
+  TopDownOracleGen2(RNNGrammar *gram) :
+      Oracle(gram) {}
   void load_oracle(const std::string& file);
-  cnn::Dict* nd; // dictionary of nonterminal types
 };
 
 } // namespace parser

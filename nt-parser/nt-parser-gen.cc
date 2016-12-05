@@ -26,13 +26,11 @@
 #include "cnn/dict.h"
 #include "cnn/cfsm-builder.h"
 
-#include "nt-parser/oracle.h"
+#include "nt-parser/rnn_grammar.h"
 #include "nt-parser/pretrained.h"
 #include "nt-parser/compressed-fstream.h"
 #include "nt-parser/eval.h"
 
-// dictionaries
-cnn::Dict termdict, ntermdict, adict, posdict;
 
 volatile bool requested_stop = false;
 unsigned kSOS = 0;
@@ -44,18 +42,13 @@ unsigned ACTION_DIM = 36;
 unsigned PRETRAINED_DIM = 50;
 unsigned LSTM_INPUT_DIM = 60;
 
-unsigned ACTION_SIZE = 0;
-unsigned VOCAB_SIZE = 0;
-unsigned NT_SIZE = 0;
 float DROPOUT = 0.0f;
-std::map<int,int> action2NTindex;  // pass in index of action NT(X), return index of X
 
 using namespace cnn::expr;
 using namespace cnn;
 using namespace std;
 namespace po = boost::program_options;
 
-vector<unsigned> possible_actions;
 unordered_map<unsigned, vector<float>> pretrained;
 
 ClassFactoredSoftmaxBuilder *cfsm = nullptr;
@@ -94,6 +87,10 @@ void InitCommandLine(int argc, char** argv, po::variables_map* conf) {
 }
 
 struct ParserBuilder {
+  const RNNGrammar *grammar;
+  const unsigned nt_size;
+  const unsigned action_size;
+  const unsigned vocab_size;
   LSTMBuilder stack_lstm; // (layers, input, hidden, trainer)
   LSTMBuilder term_lstm; // (layers, input, hidden, trainer)
   LSTMBuilder action_lstm;
@@ -122,34 +119,40 @@ struct ParserBuilder {
 
   Parameters* p_cW;
 
-  explicit ParserBuilder(Model* model, const unordered_map<unsigned, vector<float>>& pretrained) :
-      stack_lstm(LAYERS, LSTM_INPUT_DIM, HIDDEN_DIM, model),
-      term_lstm(LAYERS, INPUT_DIM, HIDDEN_DIM, model),  // sequence of generated terminals
-      action_lstm(LAYERS, ACTION_DIM, HIDDEN_DIM, model),
-      const_lstm_fwd(1, LSTM_INPUT_DIM, LSTM_INPUT_DIM, model), // used to compose children of a node into a representation of the node
-      const_lstm_rev(1, LSTM_INPUT_DIM, LSTM_INPUT_DIM, model), // used to compose children of a node into a representation of the node
-      p_w(model->add_lookup_parameters(VOCAB_SIZE, {INPUT_DIM})),
-      p_t(model->add_lookup_parameters(VOCAB_SIZE, {INPUT_DIM})),
-      p_nt(model->add_lookup_parameters(NT_SIZE, {LSTM_INPUT_DIM})),
-      p_ntup(model->add_lookup_parameters(NT_SIZE, {LSTM_INPUT_DIM})),
-      p_a(model->add_lookup_parameters(ACTION_SIZE, {ACTION_DIM})),
-      p_pbias(model->add_parameters({HIDDEN_DIM})),
-      p_A(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
-      p_S(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
-      p_T(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
-      //p_pbias2(model->add_parameters({HIDDEN_DIM})),
-      //p_A2(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
-      //p_S2(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
-      //p_w2l(model->add_parameters({LSTM_INPUT_DIM, INPUT_DIM})),
-      //p_ib(model->add_parameters({LSTM_INPUT_DIM})),
-      p_cbias(model->add_parameters({LSTM_INPUT_DIM})),
-      p_p2a(model->add_parameters({ACTION_SIZE, HIDDEN_DIM})),
-      p_action_start(model->add_parameters({ACTION_DIM})),
-      p_abias(model->add_parameters({ACTION_SIZE})),
-
-      p_stack_guard(model->add_parameters({LSTM_INPUT_DIM})),
-
-      p_cW(model->add_parameters({LSTM_INPUT_DIM, LSTM_INPUT_DIM * 2})) {
+  explicit ParserBuilder(const RNNGrammar *gram,
+                         Model* model,
+                         const unordered_map<unsigned, vector<float>>& pretrained) :
+    grammar(gram),
+    nt_size(gram->ntermdict.size()),
+    action_size(gram->adict.size()),
+    vocab_size(gram->termdict.size()),
+    stack_lstm(LAYERS, LSTM_INPUT_DIM, HIDDEN_DIM, model),
+    term_lstm(LAYERS, INPUT_DIM, HIDDEN_DIM, model),  // sequence of generated terminals
+    action_lstm(LAYERS, ACTION_DIM, HIDDEN_DIM, model),
+    const_lstm_fwd(1, LSTM_INPUT_DIM, LSTM_INPUT_DIM, model), // used to compose children of a node into a representation of the node
+    const_lstm_rev(1, LSTM_INPUT_DIM, LSTM_INPUT_DIM, model), // used to compose children of a node into a representation of the node
+    p_w(model->add_lookup_parameters(vocab_size, {INPUT_DIM})),
+    p_t(model->add_lookup_parameters(vocab_size, {INPUT_DIM})),
+    p_nt(model->add_lookup_parameters(nt_size, {LSTM_INPUT_DIM})),
+    p_ntup(model->add_lookup_parameters(nt_size, {LSTM_INPUT_DIM})),
+    p_a(model->add_lookup_parameters(action_size, {ACTION_DIM})),
+    p_pbias(model->add_parameters({HIDDEN_DIM})),
+    p_A(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
+    p_S(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
+    p_T(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
+    //p_pbias2(model->add_parameters({HIDDEN_DIM})),
+    //p_A2(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
+    //p_S2(model->add_parameters({HIDDEN_DIM, HIDDEN_DIM})),
+    //p_w2l(model->add_parameters({LSTM_INPUT_DIM, INPUT_DIM})),
+    //p_ib(model->add_parameters({LSTM_INPUT_DIM})),
+    p_cbias(model->add_parameters({LSTM_INPUT_DIM})),
+    p_p2a(model->add_parameters({action_size, HIDDEN_DIM})),
+    p_action_start(model->add_parameters({ACTION_DIM})),
+    p_abias(model->add_parameters({action_size})),
+    
+    p_stack_guard(model->add_parameters({LSTM_INPUT_DIM})),
+    
+    p_cW(model->add_parameters({LSTM_INPUT_DIM, LSTM_INPUT_DIM * 2})) {
     if (pretrained.size() > 0) {
       cerr << "Pretrained embeddings not implemented\n";
       abort();
@@ -178,8 +181,8 @@ static bool IsActionForbidden_Generative(const string& a, char prev_a, unsigned 
 // parser training data
 // if sent is empty, generate a sentence
 vector<unsigned> log_prob_parser(ComputationGraph* hg,
-                     const parser::Sentence& sent,
-                     const vector<int>& correct_actions,
+                     const Sentence& sent,
+                     const vector<unsigned>& correct_actions,
                      double *right,
                      bool is_evaluation) {
     vector<unsigned> results;
@@ -253,8 +256,8 @@ vector<unsigned> log_prob_parser(ComputationGraph* hg,
       assert (stack.size() == stack_content.size());
       // get list of possible actions for the current parser state
       current_valid_actions.clear();
-      for (auto a: possible_actions) {
-        if (IsActionForbidden_Generative(adict.Convert(a), prev_a, terms.size(), stack.size(), nopen_parens))
+      for (auto a: grammar->possible_actions) {
+        if (IsActionForbidden_Generative(grammar->adict.Convert(a), prev_a, terms.size(), stack.size(), nopen_parens))
           continue;
         current_valid_actions.push_back(a);
       }
@@ -292,11 +295,11 @@ vector<unsigned> log_prob_parser(ComputationGraph* hg,
         }
         if (w == current_valid_actions.size()) w--;
         action = current_valid_actions[w];
-        const string& a = adict.Convert(action);
+        const string& a = grammar->adict.Convert(action);
         if (a[0] == 'R') cerr << ")";
         if (a[0] == 'N') {
-          int nt = action2NTindex[action];
-          cerr << " (" << ntermdict.Convert(nt);
+          int nt = grammar->action2NTindex.find(action)->second;
+          cerr << " (" << grammar->ntermdict.Convert(nt);
         }
       } else {
         if (action_count >= correct_actions.size()) {
@@ -316,7 +319,7 @@ vector<unsigned> log_prob_parser(ComputationGraph* hg,
       action_lstm.add_input(actione);
 
       // do action
-      const string& actionString=adict.Convert(action);
+      const string& actionString=grammar->adict.Convert(action);
       //cerr << "ACT: " << actionString << endl;
       const char ac = actionString[0];
       const char ac2 = actionString[1];
@@ -332,14 +335,14 @@ vector<unsigned> log_prob_parser(ComputationGraph* hg,
         //Expression nlp_t = rectify(p_t);
         if (sample) {
           wordid = cfsm->sample(nlp_t);
-          cerr << " " << termdict.Convert(wordid);
+          cerr << " " << grammar->termdict.Convert(wordid);
         } else {
           assert(termc < sent.size());
           wordid = sent.raw[termc];
           log_probs.push_back(-cfsm->neg_log_softmax(nlp_t, wordid));
         }
         assert (wordid != 0);
-        stack_content.push_back(termdict.Convert(wordid)); //add the string of the word to the stack
+        stack_content.push_back(grammar->termdict.Convert(wordid)); //add the string of the word to the stack
         ++termc;
         Expression word = lookup(*hg, p_w, wordid);
         terms.push_back(word);
@@ -349,11 +352,11 @@ vector<unsigned> log_prob_parser(ComputationGraph* hg,
         is_open_paren.push_back(-1);
       } else if (ac == 'N') { // NT
         ++nopen_parens;
-        auto it = action2NTindex.find(action);
-        assert(it != action2NTindex.end());
+        auto it = grammar->action2NTindex.find(action);
+        assert(it != grammar->action2NTindex.end());
         int nt_index = it->second;
         nt_count++;
-        stack_content.push_back(ntermdict.Convert(nt_index));
+        stack_content.push_back(grammar->ntermdict.Convert(nt_index));
         Expression nt_embedding = lookup(*hg, p_nt, nt_index);
         stack.push_back(nt_embedding);
         stack_lstm.add_input(nt_embedding);
@@ -485,51 +488,34 @@ int main(int argc, char** argv) {
   cerr << "PARAMETER FILE: " << fname << endl;
   bool softlinkCreated = false;
 
-  kSOS = termdict.Convert("<s>");
+  RNNGrammar grammar;
+  kSOS = grammar.termdict.Convert("<s>");
   Model model;
-  cfsm = new ClassFactoredSoftmaxBuilder(HIDDEN_DIM, conf["clusters"].as<string>(), &termdict, &model);
+  cfsm = new ClassFactoredSoftmaxBuilder(HIDDEN_DIM, conf["clusters"].as<string>(),
+          &grammar.termdict, &model);
 
-  parser::TopDownOracleGen corpus(&termdict, &adict, &posdict, &ntermdict);
-  parser::TopDownOracleGen dev_corpus(&termdict, &adict, &posdict, &ntermdict);
-  parser::TopDownOracleGen2 test_corpus(&termdict, &adict, &posdict, &ntermdict);
-  corpus.load_oracle(conf["training_data"].as<string>());
+  Corpus corpus(&grammar);
+  Corpus dev_corpus(&grammar);
+  Corpus test_corpus(&grammar);
+  corpus.load_oracle(conf["training_data"].as<string>(), false);
 
   if (conf.count("words"))
-    parser::ReadEmbeddings_word2vec(conf["words"].as<string>(), &termdict, &pretrained);
+    parser::ReadEmbeddings_word2vec(conf["words"].as<string>(), &grammar.termdict, &pretrained);
 
   // freeze dictionaries so we don't accidentaly load OOVs
-  termdict.Freeze();
-  adict.Freeze();
-  ntermdict.Freeze();
-  posdict.Freeze();
+  grammar.Freeze();
 
   if (conf.count("dev_data")) {
     cerr << "Loading validation set\n";
-    dev_corpus.load_oracle(conf["dev_data"].as<string>());
+    dev_corpus.load_oracle(conf["dev_data"].as<string>(), false);
   }
 
   if (conf.count("test_data")) {
     cerr << "Loading test set\n";
-    test_corpus.load_oracle(conf["test_data"].as<string>());
+    test_corpus.load_oracle(conf["test_data"].as<string>(), false);
   }
 
-  for (unsigned i = 0; i < adict.size(); ++i) {
-    const string& a = adict.Convert(i);
-    if (a[0] != 'N') continue;
-    size_t start = a.find('(') + 1;
-    size_t end = a.rfind(')');
-    int nt = ntermdict.Convert(a.substr(start, end - start));
-    action2NTindex[i] = nt;
-  }
-
-  NT_SIZE = ntermdict.size();
-  VOCAB_SIZE = termdict.size();
-  ACTION_SIZE = adict.size();
-  possible_actions.resize(adict.size());
-  for (unsigned i = 0; i < adict.size(); ++i)
-    possible_actions[i] = i;
-
-  ParserBuilder parser(&model, pretrained);
+  ParserBuilder parser(&grammar, &model, pretrained);
   if (conf.count("model")) {
     ifstream in(conf["model"].as<string>().c_str());
     boost::archive::text_iarchive ia(in);
@@ -578,7 +564,7 @@ int main(int argc, char** argv) {
            }
            tot_seen += 1;
            auto& sentence = corpus.sents[order[si]];
-	   const vector<int>& actions=corpus.actions[order[si]];
+	   const vector<unsigned>& actions=corpus.actions[order[si]];
            ComputationGraph hg;
            parser.log_prob_parser(&hg,sentence,actions,&right,false);
            double lp = as_scalar(hg.incremental_forward());
@@ -606,7 +592,7 @@ int main(int argc, char** argv) {
         // generate random sample
         ComputationGraph cg;
         double x;
-        parser.log_prob_parser(&cg, parser::Sentence(), vector<int>(),&x,true);
+        parser.log_prob_parser(&cg, Sentence(), vector<unsigned>(),&x,true);
       }
       if (logc % 100 == 0) { // report on dev set
         unsigned dev_size = dev_corpus.size();
@@ -617,7 +603,7 @@ int main(int argc, char** argv) {
         auto t_start = chrono::high_resolution_clock::now();
         for (unsigned sii = 0; sii < dev_size; ++sii) {
            const auto& sentence=dev_corpus.sents[sii];
-	   const vector<int>& actions=dev_corpus.actions[sii];
+	   const vector<unsigned>& actions=dev_corpus.actions[sii];
            dwords += sentence.size();
            {  ComputationGraph hg;
               parser.log_prob_parser(&hg,sentence,actions,&right,true);
@@ -654,14 +640,14 @@ int main(int argc, char** argv) {
   } // should do training?
   if (test_corpus.size() > 0) {
     // if rescoring, we may have many repeats, cache them
-    unordered_map<vector<int>, unordered_map<vector<int>,double,boost::hash<vector<int>>>, boost::hash<vector<int>>> s2a2p;
+    unordered_map<vector<int>, unordered_map<vector<unsigned>,double,boost::hash<vector<unsigned>>>, boost::hash<vector<int>>> s2a2p;
     unsigned test_size = test_corpus.size();
     double llh = 0;
     double right = 0;
     double dwords = 0;
     for (unsigned sii = 0; sii < test_size; ++sii) {
       const auto& sentence=test_corpus.sents[sii];
-      const vector<int>& actions=test_corpus.actions[sii];
+      const vector<unsigned>& actions=test_corpus.actions[sii];
       dwords += sentence.size();
       double& lp = s2a2p[sentence.raw][actions];
       if (!lp) {

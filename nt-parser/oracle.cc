@@ -13,14 +13,6 @@ namespace parser {
 
 Oracle::~Oracle() {}
 
-inline bool is_ws(char x) { //check whether the character is a space or tab delimiter
-  return (x == ' ' || x == '\t');
-}
-
-inline bool is_not_ws(char x) {
-  return (x != ' ' && x != '\t');
-}
-
 void Oracle::ReadSentenceView(const std::string& line, cnn::Dict* dict, vector<int>* sent) {
   unsigned cur = 0;
   while(cur < line.size()) {
@@ -34,10 +26,6 @@ void Oracle::ReadSentenceView(const std::string& line, cnn::Dict* dict, vector<i
     }
   }
   assert(sent->size() > 0); // empty sentences not allowed
-}
-
-void TopDownOracle::load_bdata(const string& file) {
-   devdata=file;
 }
 
 void TopDownOracle::load_oracle(const string& file, bool is_training) {
