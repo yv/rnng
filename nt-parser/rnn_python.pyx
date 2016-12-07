@@ -146,7 +146,14 @@ cdef class RNNG_Parser:
         line_out = line_out.replace('(', '_RRB_')
         line_out = line_out.replace(')', '_LRB_')
         words_unk = line_out.split()
-        for w, tag, morphtag, wu in izip(words, tags, morph, words_unk):
+        sent.pos_offset.push_back(0)
+        for i, w in enumerate(words):
+            tag = tags[i]
+            if self.use_morph:
+                morphtag = morph[i]
+            else:
+                morphtag = "_"
+            wu = words_unk[i]
             w_lower = w.decode('UTF-8').lower().encode('UTF-8')
             s_w = w
             s_wl = w_lower
