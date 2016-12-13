@@ -34,6 +34,7 @@ struct RNNGrammar {
     adict.Freeze();
     ntermdict.Freeze();
     posdict.Freeze();
+    edgedict.Freeze();
     cerr << "    cumulative      action vocab size: "
 	 << adict.size() << endl;
     cerr << "    cumulative    terminal vocab size: "
@@ -42,6 +43,8 @@ struct RNNGrammar {
 	 << ntermdict.size() << endl;
     cerr << "    cumulative         pos vocab size: "
 	 << posdict.size() << endl;
+    cerr << "    cumulative  func label vocab size: "
+	 << edgedict.size() << endl;
     // compute action2NTindex
     for (unsigned i = 0; i < adict.size(); ++i) {
       const std::string& a = adict.Convert(i);
