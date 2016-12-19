@@ -116,7 +116,7 @@ void Corpus::load_oracle(const string& file, bool split) {
     getline(in, line);
     ReadSentenceView(line, grammar->termdict, cur_sent.raw);
     getline(in, line);
-    ReadSentenceView(line, grammar->termdict, cur_sent.lc);
+    ReadSentenceView(line, grammar->get_pretrain_dict(), cur_sent.lc);
     getline(in, line);
     ReadSentenceView(line, grammar->termdict, cur_sent.unk);
     lc += 3;

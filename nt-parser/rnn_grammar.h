@@ -1,5 +1,6 @@
 #ifndef RNN_GRAMMAR_H
 #define RNN_GRAMMAR_H
+// vim: sta si
 #include <map>
 #include <string>
 #include <vector>
@@ -21,16 +22,36 @@ struct Corpus;
 struct RNNGrammar {
   // dictionaries
   cnn::Dict termdict, ntermdict, adict, posdict;
+  cnn::Dict pretrain_dict;
   cnn::Dict edgedict;
+  bool separate_dicts=false;
   // pass in index of action NT(X), return index of X
   std::map<unsigned,unsigned> action2NTindex;   
   std::vector<unsigned> possible_actions;
   Corpus *load_corpus(const std::string &fname, bool split);
 
+  const cnn::Dict& get_pretrain_dict() const {
+    if (separate_dicts) {
+      return pretrain_dict;
+    } else {
+      return termdict;
+    }
+  }
+
+  cnn::Dict& get_pretrain_dict() {
+    if (separate_dicts) {
+      return pretrain_dict;
+    } else {
+      return termdict;
+    }
+  }
+
   void Freeze() {
     termdict.Freeze();
     // prevents problems with the lowercased data
     termdict.SetUnk("UNK");
+    pretrain_dict.Freeze();
+    pretrain_dict.SetUnk("UNK");
     adict.Freeze();
     ntermdict.Freeze();
     posdict.Freeze();
@@ -39,6 +60,10 @@ struct RNNGrammar {
 	 << adict.size() << endl;
     cerr << "    cumulative    terminal vocab size: "
 	 << termdict.size() << endl;
+    if (separate_dicts) {
+        cerr << "    cumulative   pretrain vocab size: "
+             << pretrain_dict.size() << endl;
+    }
     cerr << "    cumulative nonterminal vocab size: "
 	 << ntermdict.size() << endl;
     cerr << "    cumulative         pos vocab size: "
@@ -62,6 +87,9 @@ struct RNNGrammar {
 
   void init_from_files(const std::string prefix) {
     load_dict(termdict, prefix+"_term.txt");
+    if (separate_dicts) {
+      load_dict(pretrain_dict, prefix+"_pretrain.txt");
+    }
     load_dict(adict, prefix+"_actions.txt");
     load_dict(ntermdict, prefix+"_nterm.txt");
     load_dict(posdict, prefix+"_pos.txt");
@@ -70,6 +98,9 @@ struct RNNGrammar {
 
   void save_to_files(const std::string prefix) {
     save_dict(termdict, prefix+"_term.txt");
+    if (separate_dicts) {
+      save_dict(pretrain_dict, prefix+"_pretrain.txt");
+    }
     save_dict(adict, prefix+"_actions.txt");
     save_dict(ntermdict, prefix+"_nterm.txt");
     save_dict(posdict, prefix+"_pos.txt");

@@ -39,6 +39,7 @@ struct ParserBuilder {
     const unsigned nt_size;
     const unsigned action_size;
     const unsigned vocab_size;
+    const unsigned pretrain_size;
     const unsigned pos_size;
     const unsigned edges_size;
     const float dropout_amount;

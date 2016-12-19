@@ -57,6 +57,7 @@ void InitCommandLine(int argc, char** argv, po::variables_map* conf) {
         ("model,m", po::value<string>(), "Load saved model from this file")
         ("use_pos_tags,P", "make POS tags visible to parser")
         ("split_pos_tags", "split POS tags")
+        ("separate_dicts", "split vocabulary between raw/unk and lc")
         ("use_edge_labels", "train and predict function labels")
         ("layers", po::value<unsigned>()->default_value(2), "number of LSTM layers")
         ("action_dim", po::value<unsigned>()->default_value(16), "action embedding size")
@@ -133,6 +134,7 @@ int main(int argc, char** argv) {
   po::variables_map conf;
   InitCommandLine(argc, argv, &conf);
   NetworkSettings settings;
+  gram.separate_dicts = conf.count("separate_dicts");
   settings.IMPLICIT_REDUCE_AFTER_SHIFT = conf.count("explicit_terminal_reduce") == 0;
   settings.USE_POS = conf.count("use_pos_tags");
   settings.SPLIT_POS = conf.count("split_pos_tags");
