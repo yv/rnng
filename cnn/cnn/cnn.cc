@@ -222,7 +222,15 @@ void ComputationGraph::PrintGraphviz() const {
     for (auto arg : node->args)
       var_names.push_back(string("v") + to_string((unsigned)arg));
     cerr << "  N" << nc << " [label=\"v" << nc << " = "
-         << node->as_string(var_names) << "\"];\n";
+         << node->as_string(var_names) << "\"";
+    SimpleExecutionEngine *see = static_cast<SimpleExecutionEngine *>(ee);
+    if (nc < see->nfxs.size()) {
+        cerr << ", fx_sqnorm=\"" << see->nfxs[nc].vec().squaredNorm() << "\"";
+    }
+    if (nc < see->ndEdfs.size()) {
+        cerr << ", dEdf_sqnorm=\"" << see->ndEdfs[nc].vec().squaredNorm() << "\"";
+    }
+    cerr << "];\n";
     for (auto arg : node->args)
       cerr << "  N" << ((unsigned)arg) << " -> N" << nc << ";\n";
     ++nc;

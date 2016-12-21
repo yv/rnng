@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_set>
 #include <string>
+#include <sstream>
 
 
 #include <boost/serialization/split_member.hpp>
@@ -43,6 +44,20 @@ struct Parameters : public ParametersBase {
   Dim dim;
   Tensor values;
   Tensor g;
+  const char *name=nullptr;
+  int param_id=-1;
+  std::string friendly_description() const {
+    std::stringstream stream;
+    stream << "Parameters<";
+    if (param_id >= 0) {
+        stream << "id=" << param_id << ",";
+    }
+    if (name != nullptr) {
+        stream << "name=" << name << ",";
+    }
+    stream << "dim=" << dim << ">";
+    return stream.str();
+  }
  private:
   Parameters() {}
   explicit Parameters(const Dim& d, float minmax); // initialize with ~U(-minmax,+minmax)
@@ -72,6 +87,20 @@ struct LookupParameters : public ParametersBase {
   std::vector<Tensor> grads;
   // gradients are sparse, so track which components are nonzero
   std::unordered_set<unsigned> non_zero_grads;
+  const char *name=nullptr;
+  int param_id=-1;
+  std::string friendly_description() const {
+    std::stringstream stream;
+    stream << "LookupParameters<";
+    if (param_id >= 0) {
+        stream << "id=" << param_id << ",";
+    }
+    if (name != nullptr) {
+        stream << "name=" << name << ",";
+    }
+    stream << "len=" << values.size() << ",dim=" << dim << ">";
+    return stream.str();
+  }
  private:
   LookupParameters() {}
   LookupParameters(unsigned n, const Dim& d);
@@ -108,7 +137,9 @@ class Model {
   void reset_gradient();
   // set scale to use custom initialization
   Parameters* add_parameters(const Dim& d, float scale = 0.0f);
+  Parameters* add_parameters(const Dim& d, const char *name);
   LookupParameters* add_lookup_parameters(unsigned n, const Dim& d);
+  LookupParameters* add_lookup_parameters(unsigned n, const Dim& d, const char *name);
   // project weights so their L2 norm = radius
   void project_weights(float radius = 1.0f);
 

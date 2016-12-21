@@ -54,6 +54,10 @@ void Parameters::g_squared_l2norm(float* sqnorm) const {
   gpu::l2_norm_reducer(g.d.size(), g.v, sqnorm, true, false);
 #else
   *sqnorm = g.vec().squaredNorm();
+  if (!isfinite(*sqnorm)) {
+    cerr << friendly_description() << " has " << *sqnorm <<
+        " grad sq l2 norm" << endl;
+  }
 #endif
 }
 
@@ -200,13 +204,34 @@ float Model::gradient_l2_norm() const {
 
 Parameters* Model::add_parameters(const Dim& d, float scale) {
   Parameters* p = new Parameters(d, scale);
+  p->param_id=params.size();
   all_params.push_back(p);
   params.push_back(p);
   return p;
 }
 
+Parameters* Model::add_parameters(const Dim& d, const char *name) {
+  Parameters* p = new Parameters(d, 0.0);
+  p->name = name;
+  p->param_id=params.size();
+  all_params.push_back(p);
+  params.push_back(p);
+  return p;
+}
+
+
 LookupParameters* Model::add_lookup_parameters(unsigned n, const Dim& d) {
   LookupParameters* p = new LookupParameters(n,d);
+  p->param_id=lookup_params.size();
+  all_params.push_back(p);
+  lookup_params.push_back(p);
+  return p;
+}
+
+LookupParameters* Model::add_lookup_parameters(unsigned n, const Dim& d, const char *name) {
+  LookupParameters* p = new LookupParameters(n,d);
+  p->name = name;
+  p->param_id=lookup_params.size();
   all_params.push_back(p);
   lookup_params.push_back(p);
   return p;

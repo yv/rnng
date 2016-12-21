@@ -22,6 +22,7 @@ class ExecutionEngine {
 };
 
 class SimpleExecutionEngine : public ExecutionEngine {
+  friend class ComputationGraph;
  public:
   explicit SimpleExecutionEngine(const ComputationGraph& cg) : ExecutionEngine(cg) {}
   void invalidate() override;

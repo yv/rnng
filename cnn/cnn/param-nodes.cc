@@ -34,7 +34,7 @@ void ConstParameterNode::backward_impl(const vector<const Tensor*>& xs,
 
 string ParameterNode::as_string(const vector<string>& arg_names) const {
   ostringstream s;
-  s << "parameters(" << dim << ", " << params << ')';
+  s << "parameters(" << dim << ", " << params->friendly_description() << ')';
   return s.str();
 }
 
