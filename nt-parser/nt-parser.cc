@@ -54,9 +54,11 @@ void InitCommandLine(int argc, char** argv, po::variables_map* conf) {
         ("dropout,D", po::value<float>(), "Dropout rate")
         ("samples,s", po::value<unsigned>(), "Sample N trees for each test sentence instead of greedy max decoding")
         ("alpha,a", po::value<float>(), "Flatten (0 < alpha < 1) or sharpen (1 < alpha) sampling distribution")
+        ("eta", po::value<float>(), "Use different initial learning rate (default 0.1)")
         ("model,m", po::value<string>(), "Load saved model from this file")
         ("use_pos_tags,P", "make POS tags visible to parser")
         ("split_pos_tags", "split POS tags")
+        ("avg_features", "average morph features")
         ("separate_dicts", "split vocabulary between raw/unk and lc")
         ("use_edge_labels", "train and predict function labels")
         ("layers", po::value<unsigned>()->default_value(2), "number of LSTM layers")
@@ -120,7 +122,28 @@ double eval_output(const string out_fname, const string dev_fname) {
   }
   return newfmeasure;
 }
-  
+
+/** returns true if gradients don't show sign of nan-ness
+ * otherwise gives some debugging output and returns false
+ */
+bool check_for_nan(ComputationGraph &hg, Model &model) {
+  float result;
+  auto p = model.parameters_list()[0];
+  p->g_squared_l2norm(&result);
+  if (isfinite(result)) {
+    return true;
+  } else {
+    cerr << "Invalid gradient: " << result << endl;
+    hg.PrintGraphviz();
+    for (auto p: model.parameters_list()) {
+      p->clear();
+    }
+    for (auto p: model.lookup_parameters_list()) {
+      p->clear();
+    }
+    return false;
+  }
+}
 
 int main(int argc, char** argv) {
   cnn::Initialize(argc, argv);
@@ -139,6 +162,7 @@ int main(int argc, char** argv) {
   settings.USE_POS = conf.count("use_pos_tags");
   settings.SPLIT_POS = conf.count("split_pos_tags");
   settings.USE_EDGES = conf.count("use_edge_labels");
+  settings.AVG_FEATURES = conf.count("avg_features");
   if (conf.count("dropout"))
     settings.DROPOUT = conf["dropout"].as<float>();
   settings.LAYERS = conf["layers"].as<unsigned>();
@@ -210,7 +234,11 @@ int main(int argc, char** argv) {
   //TRAINING
   if (conf.count("train")) {
     signal(SIGINT, signal_callback_handler);
-    SimpleSGDTrainer sgd(&model);
+    double eta0 = 0.1;
+    if (conf.count("eta")) {
+        eta0 = conf["eta"].as<float>();
+    }
+    SimpleSGDTrainer sgd(&model, 1e-6, eta0);
     //AdamTrainer sgd(&model);
     //MomentumSGDTrainer sgd(&model);
     //sgd.eta_decay = 0.08;
@@ -228,7 +256,6 @@ int main(int argc, char** argv) {
     double llh = 0;
     bool first = true;
     int iter = -1;
-    double best_dev_err = 9e99;
     double bestf1=0.0;
     //cerr << "TRAINING STARTED AT: " << put_time(localtime(&time_start), "%c %Z") << endl;
     while(!requested_stop) {
@@ -254,7 +281,9 @@ int main(int argc, char** argv) {
              assert(lp >= 0.0);
            }
            hg.backward();
-           sgd.update(1.0);
+           if (check_for_nan(hg, model)) {
+             sgd.update(1.0);
+           }
            llh += lp;
            ++si;
            trs += actions.size();
@@ -313,10 +342,8 @@ int main(int argc, char** argv) {
 	double newfmeasure = eval_output(pfx, conf["bracketing_dev_data"].as<string>());
         
         cerr << "  **dev (iter=" << iter << " epoch=" << (tot_seen / corpus.size()) << ")\tllh=" << llh << " ppl: " << exp(llh / dwords) << " f1: " << newfmeasure << " err: " << err << "\t[" << dev_size << " sents in " << chrono::duration<double, milli>(t_end-t_start).count() << " ms]" << endl;
-//        if (err < best_dev_err && (tot_seen / corpus.size()) > 1.0) {
        if (newfmeasure>bestf1) {
           cerr << "  new best...writing model to " << fname << " ...\n";
-          best_dev_err = err;
 	  bestf1=newfmeasure;
           save_model(model, fname);
           system((string("cp ") + pfx + string(" ") + pfx + string(".best")).c_str());

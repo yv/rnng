@@ -29,10 +29,10 @@ struct NetworkSettings {
     bool SPLIT_POS = false;
     bool USE_EDGES = false;
     unsigned IMPLICIT_REDUCE_AFTER_SHIFT = 0;
+    bool AVG_FEATURES = false;
     float ALPHA = 1.f;
     string propose_filename();
 };
-
 
 struct ParserBuilder {
     const RNNGrammar *grammar;
@@ -47,6 +47,7 @@ struct ParserBuilder {
     const bool implicit_reduce;
     const bool use_pos;
     const bool use_edges;
+    const bool avg_features;
     vector<bool> singletons;
     LSTMBuilder stack_lstm; // (layers, input, hidden, trainer)
     LSTMBuilder *buffer_lstm;
@@ -92,6 +93,10 @@ struct ParserBuilder {
         const vector<bool> &singleton_init,
         Model* model,
         unordered_map<unsigned, vector<float>>* pre);
+    vector<Expression> prepare_buffer(
+        ComputationGraph *hg,
+        const Sentence& sent,
+        bool is_evaluation);
     vector<unsigned> log_prob_parser(ComputationGraph* hg,
         const Sentence& sent,
         const vector<unsigned>& correct_actions,
@@ -100,6 +105,16 @@ struct ParserBuilder {
         double *right,
         bool is_evaluation,
         bool sample = false);
+    unsigned get_mfeat_category(int mfeat) {
+      const string& s=grammar->posdict.Convert(mfeat);
+      char s0 = s[0];
+      if (s0 >= '0' && s0 <= '9') {
+        return s0 - '0';
+      } else {
+        return 0;
+      }
+    }
+
 };
 
 

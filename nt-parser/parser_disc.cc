@@ -10,6 +10,7 @@
 using std::ostringstream;
 using std::ifstream;
 using std::ofstream;
+using cnn::Dim;
 using cnn::rand01;
 
 string NetworkSettings::propose_filename() {
@@ -42,6 +43,7 @@ ParserBuilder::ParserBuilder(
     implicit_reduce(settings->IMPLICIT_REDUCE_AFTER_SHIFT),
     use_pos(settings->USE_POS),
     use_edges(settings->USE_EDGES),
+    avg_features(settings->AVG_FEATURES),
     dropout_amount(settings->DROPOUT),
     alpha(settings->ALPHA),
     pretrained(pre), 
@@ -56,21 +58,21 @@ ParserBuilder::ParserBuilder(
             settings->LSTM_INPUT_DIM, model),
     const_lstm_rev(settings->LAYERS, settings->LSTM_INPUT_DIM,
             settings->LSTM_INPUT_DIM, model),
-    p_w(model->add_lookup_parameters(vocab_size, {settings->INPUT_DIM})),
-    p_t(model->add_lookup_parameters(pretrain_size, {settings->INPUT_DIM})),
-    p_nt(model->add_lookup_parameters(nt_size, {settings->LSTM_INPUT_DIM})),
-    p_ntup(model->add_lookup_parameters(nt_size, {settings->LSTM_INPUT_DIM})),
-    p_a(model->add_lookup_parameters(action_size, {settings->ACTION_DIM})),
-    p_pbias(model->add_parameters({settings->HIDDEN_DIM})),
-    p_A(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM})),
-    p_B(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM})),
-    p_S(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM})),
-    p_w2l(model->add_parameters({settings->LSTM_INPUT_DIM, settings->INPUT_DIM})),
-    p_ib(model->add_parameters({settings->LSTM_INPUT_DIM})),
-    p_cbias(model->add_parameters({settings->LSTM_INPUT_DIM})),
-    p_p2a(model->add_parameters({action_size, settings->HIDDEN_DIM})),
-    p_action_start(model->add_parameters({settings->ACTION_DIM})),
-    p_abias(model->add_parameters({action_size})),
+    p_w(model->add_lookup_parameters(vocab_size, {settings->INPUT_DIM}, "w")),
+    p_t(model->add_lookup_parameters(pretrain_size, {settings->INPUT_DIM}, "t")),
+    p_nt(model->add_lookup_parameters(nt_size, {settings->LSTM_INPUT_DIM}, "nt")),
+    p_ntup(model->add_lookup_parameters(nt_size, {settings->LSTM_INPUT_DIM}, "ntup")),
+    p_a(model->add_lookup_parameters(action_size, {settings->ACTION_DIM}, "a")),
+    p_pbias(model->add_parameters({settings->HIDDEN_DIM}, "bias")),
+    p_A(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM}, "A")),
+    p_B(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM}, "B")),
+    p_S(model->add_parameters({settings->HIDDEN_DIM, settings->HIDDEN_DIM}, "S")),
+    p_w2l(model->add_parameters({settings->LSTM_INPUT_DIM, settings->INPUT_DIM}, "w2l")),
+    p_ib(model->add_parameters({settings->LSTM_INPUT_DIM}, "ib")),
+    p_cbias(model->add_parameters({settings->LSTM_INPUT_DIM}, "cbias")),
+    p_p2a(model->add_parameters({action_size, settings->HIDDEN_DIM}, "c2a")),
+    p_action_start(model->add_parameters({settings->ACTION_DIM}, "action_start")),
+    p_abias(model->add_parameters({action_size}, "action_size")),
 
     p_buffer_guard(model->add_parameters({settings->LSTM_INPUT_DIM})),
     p_stack_guard(model->add_parameters({settings->LSTM_INPUT_DIM})),
@@ -154,6 +156,71 @@ bool IsActionForbidden_Discriminative(const string& a, char prev_a,
     return false;
 }
 
+/**
+ * precomputes buffer representation from left to right
+ */
+vector<Expression> ParserBuilder::prepare_buffer(ComputationGraph *hg,
+        const Sentence& sent,
+        bool build_training_graph) {
+  vector<Expression> buffer(sent.size() + 1);  // variables representing word embeddings
+  // precompute buffer representation from left to right
+  Expression ib = parameter(*hg, p_ib);
+  Expression t2l;
+  if (p_t2l)
+    t2l = parameter(*hg, p_t2l);
+  Expression p2w;
+  if (use_pos) {
+    p2w = parameter(*hg, p_p2w);
+  }
+  Expression w2l = parameter(*hg, p_w2l);
+
+  // in the discriminative model, here we set up the buffer contents
+  for (unsigned i = 0; i < sent.size(); ++i) {
+    unsigned wordid = sent.unk[i];
+    // in training, we randomly choose between training the unk vector and
+    // training the singleton's word vector
+    if (build_training_graph && singletons.size() > wordid &&
+        singletons[wordid] && rand01() < 0.5) {
+      wordid = sent.raw[i];
+    }
+    Expression w = lookup(*hg, p_w, wordid);
+
+    vector<Expression> args = {ib, w2l, w}; // learn embeddings
+    if (p_t && pretrained->count(sent.lc[i])) {  // include fixed pretrained vectors?
+      Expression t = const_lookup(*hg, p_t, sent.lc[i]);
+      args.push_back(t2l);
+      args.push_back(t);
+    }
+    if (use_pos) {
+      args.push_back(p2w);
+      Expression p = lookup(*hg, p_pos, sent.pos_val[sent.pos_offset[i]]);
+      if (avg_features) {
+        vector<float> num_feats;
+        for (unsigned j = sent.pos_offset[i] + 1; j < sent.pos_offset[i+1]; j++) {
+          unsigned mcat = get_mfeat_category(sent.pos_val[j]);
+          if (num_feats.size() <= mcat) {
+            num_feats.resize(mcat + 1);
+          }
+          num_feats[mcat]+=1.0;
+        }
+        for (unsigned j = sent.pos_offset[i] + 1; j < sent.pos_offset[i+1]; j++) {
+          p = p + lookup(*hg, p_pos, sent.pos_val[j])
+            / num_feats[get_mfeat_category(sent.pos_val[j])];
+        }
+      } else {
+        for (unsigned j = sent.pos_offset[i] + 1; j < sent.pos_offset[i+1]; j++) {
+          p = p + lookup(*hg, p_pos, sent.pos_val[j]);
+        }
+      }
+      args.push_back(p);
+    }
+    buffer[sent.size() - i] = rectify(affine_transform(args));
+  }
+  // dummy symbol to represent the empty buffer
+  buffer[0] = parameter(*hg, p_buffer_guard);
+  return buffer;
+}
+
 // *** if correct_actions is empty, this runs greedy decoding ***
 // returns parse actions for input sentence (in training just returns the reference)
 // this lets us use pretrained embeddings, when available, for words that were OOV in the
@@ -211,10 +278,6 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
     ptbias = parameter(*hg, p_ptbias);
     ptW = parameter(*hg, p_ptW);
   }
-  Expression p2w;
-  if (use_pos) {
-    p2w = parameter(*hg, p_p2w);
-  }
   if (use_edges) {
     Be = parameter(*hg, p_Be);
     Se = parameter(*hg, p_Se);
@@ -223,12 +286,7 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
     e2lbl = parameter(*hg, p_e2lbl);
     lbias = parameter(*hg, p_lbias);
   }
-  Expression ib = parameter(*hg, p_ib);
   Expression cbias = parameter(*hg, p_cbias);
-  Expression w2l = parameter(*hg, p_w2l);
-  Expression t2l;
-  if (p_t2l)
-    t2l = parameter(*hg, p_t2l);
   Expression p2a = parameter(*hg, p_p2a);
   Expression abias = parameter(*hg, p_abias);
   Expression action_start = parameter(*hg, p_action_start);
@@ -236,48 +294,13 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
 
   action_lstm.add_input(action_start);
 
-  vector<Expression> buffer(sent.size() + 1);  // variables representing word embeddings
-  vector<int> bufferi(sent.size() + 1);  // position of the words in the sentence
-  // precompute buffer representation from left to right
+  vector<Expression> buffer = prepare_buffer(hg, sent, build_training_graph);
 
-  // in the discriminative model, here we set up the buffer contents
-  for (unsigned i = 0; i < sent.size(); ++i) {
-    unsigned wordid = sent.raw[i]; // this will be equal to unk at dev/test
-    if (is_evaluation) {
-      wordid = sent.unk[i];
-    } else if (build_training_graph && singletons.size() > wordid &&
-        singletons[wordid] && rand01() > 0.5) {
-      wordid = sent.unk[i];
-    }
-    Expression w = lookup(*hg, p_w, wordid);
-
-    vector<Expression> args = {ib, w2l, w}; // learn embeddings
-    if (p_t && pretrained->count(sent.lc[i])) {  // include fixed pretrained vectors?
-      Expression t = const_lookup(*hg, p_t, sent.lc[i]);
-      args.push_back(t2l);
-      args.push_back(t);
-    }
-    if (use_pos) {
-      args.push_back(p2w);
-      Expression p = lookup(*hg, p_pos, sent.pos_val[sent.pos_offset[i]]);
-      for (unsigned j = sent.pos_offset[i] + 1; j < sent.pos_offset[i+1]; j++) {
-        p = p + lookup(*hg, p_pos, sent.pos_val[j]);
-      }
-      args.push_back(p);
-    }
-    buffer[sent.size() - i] = rectify(affine_transform(args));
-    bufferi[sent.size() - i] = i;
-  }
-  // dummy symbol to represent the empty buffer
-  buffer[0] = parameter(*hg, p_buffer_guard);
-  bufferi[0] = -999;
   for (auto& b : buffer)
     buffer_lstm->add_input(b);
 
   vector<Expression> stack;  // variables representing subtree embeddings
-  vector<int> stacki; // position of words in the sentence of head of subtree
   stack.push_back(parameter(*hg, p_stack_guard));
-  stacki.push_back(-999); // not used for anything
   // drive dummy symbol on stack through LSTM
   stack_lstm.add_input(stack.back());
   vector<int> is_open_paren; // -1 if no nonterminal has a parenthesis open, otherwise index of NT
@@ -379,23 +402,18 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
         Expression c = concatenate({nonterminal, terminal});
         Expression pt = rectify(affine_transform({ptbias, ptW, c}));
         stack.pop_back();
-        stacki.pop_back();
         stack_lstm.rewind_one_step();
         buffer.pop_back();
-        bufferi.pop_back();
         buffer_lstm->rewind_one_step();
         is_open_paren.pop_back();
         stack_lstm.add_input(pt);
         stack.push_back(pt);
-        stacki.push_back(999);
         is_open_paren.push_back(-1);
       } else {
         stack.push_back(buffer.back());
         stack_lstm.add_input(buffer.back());
-        stacki.push_back(bufferi.back());
         buffer.pop_back();
         buffer_lstm->rewind_one_step();
-        bufferi.pop_back();
         is_open_paren.push_back(-1);
       }
     } else if (ac == 'N') { // NT
@@ -408,7 +426,6 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
       Expression nt_embedding = lookup(*hg, p_nt, nt_index);
       stack.push_back(nt_embedding);
       stack_lstm.add_input(nt_embedding);
-      stacki.push_back(-1);
       is_open_paren.push_back(nt_index);
     } else { // REDUCE
       --nopen_parens;
@@ -427,12 +444,10 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
       // REMOVE EVERYTHING FROM THE STACK THAT IS GOING
       // TO BE COMPOSED INTO A TREE EMBEDDING
       is_open_paren.pop_back(); // nt symbol
-      stacki.pop_back(); // nonterminal dummy
       stack.pop_back(); // nonterminal dummy
       stack_lstm.rewind_one_step(); // nt symbol
       for (i = 0; i < nchildren; ++i) {
         children[i] = stack.back();
-        stacki.pop_back();
         stack.pop_back();
         stack_lstm.rewind_one_step();
         is_open_paren.pop_back();
@@ -509,7 +524,6 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
       Expression composed = rectify(affine_transform({cbias, cW, c}));
       stack_lstm.add_input(composed);
       stack.push_back(composed);
-      stacki.push_back(999); // who knows, should get rid of this
       is_open_paren.push_back(-1); // we just closed a paren at this position
     }
   }
@@ -522,9 +536,7 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
     abort();
   }
   assert(stack.size() == 2); // guard symbol, root
-  assert(stacki.size() == 2);
   assert(buffer.size() == 1); // guard symbol
-  assert(bufferi.size() == 1);
   Expression tot_neglogprob = -sum(log_probs);
   assert(tot_neglogprob.pg != nullptr);
   return results;
