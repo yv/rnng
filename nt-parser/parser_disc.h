@@ -31,6 +31,8 @@ struct NetworkSettings {
     unsigned IMPLICIT_REDUCE_AFTER_SHIFT = 0;
     bool AVG_FEATURES = false;
     float ALPHA = 1.f;
+    // 0 = initial buggy version; 1 = fixed version
+    int compat_version = 0;
     string propose_filename();
 };
 
@@ -43,6 +45,7 @@ struct ParserBuilder {
     const unsigned pos_size;
     const unsigned edges_size;
     const float dropout_amount;
+    const int compat_version;
     float alpha;
     const bool implicit_reduce;
     const bool use_pos;

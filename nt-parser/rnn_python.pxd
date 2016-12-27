@@ -79,6 +79,7 @@ cdef extern from "nt-parser/parser_disc.h":
         bool USE_EDGES
         unsigned IMPLICIT_REDUCE_AFTER_SHIFT
         float ALPHA
+        unsigned compat_version
     cdef cppclass c_ParserBuilder "ParserBuilder":
         c_RNNGrammar *grammar
         float alpha

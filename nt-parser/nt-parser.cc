@@ -69,6 +69,7 @@ void InitCommandLine(int argc, char** argv, po::variables_map* conf) {
         ("pretrained_dim", po::value<unsigned>()->default_value(50), "pretrained input dimension")
         ("lstm_input_dim", po::value<unsigned>()->default_value(60), "LSTM input dimension")
         ("train,t", "Should training be run?")
+        ("compat_version", po::value<unsigned>()->default_value(1), "compatibility version")
         ("words,w", po::value<string>(), "Pretrained word embeddings")
         ("beam_size,b", po::value<unsigned>()->default_value(1), "beam size")
         ("help,h", "Help");
@@ -172,6 +173,7 @@ int main(int argc, char** argv) {
   settings.ACTION_DIM = conf["action_dim"].as<unsigned>();
   settings.LSTM_INPUT_DIM = conf["lstm_input_dim"].as<unsigned>();
   settings.POS_DIM = conf["pos_dim"].as<unsigned>();
+  settings.compat_version = conf["compat_version"].as<unsigned>();
   if (conf.count("train") && conf.count("dev_data") == 0) {
     cerr << "You specified --train but did not specify --dev_data FILE\n";
     return 1;

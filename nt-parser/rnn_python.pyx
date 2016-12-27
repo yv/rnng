@@ -97,7 +97,7 @@ cdef class RNNG_Corpus:
 
 cdef class RNNG_Parser:
     def __init__(self, fname_oracle, fname_model, fname_embeddings,
-                 pipelines, use_morph, use_edges):
+                 pipelines, use_morph, use_edges, compat_version=0):
         cdef c_NetworkSettings param
         cdef vector[bool] single
         # actual network parameters are filled from the serialized model
@@ -111,6 +111,7 @@ cdef class RNNG_Parser:
         param.POS_DIM = 10
         param.USE_POS = True
         param.USE_EDGES = use_edges
+        param.compat_version = compat_version
         self.use_morph = use_morph
         self.grammar = RNNGrammar(use_morph)
         self.grammar.load_corpus(fname_oracle)

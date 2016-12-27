@@ -152,6 +152,19 @@ void Corpus::load_oracle(const string& file, bool split) {
         grammar->ntermdict.Convert(line.substr(3, line.size() - 4));
         // NT(X) is put into the actions list as NT(X)
         cur_acts.push_back(grammar->adict.Convert(line));
+      } else if (line.find("ADJOIN(") == 0) {
+        // ex.: ADJOIN(NP) NK NK
+        // reduces the topmost symbols on the stack and puts the new NT
+        // as first daughter of a new constituent
+        std::vector<string> symbols;
+        boost::split(symbols, line, boost::is_any_of("\t "));
+        string& action = symbols[0];
+        n_const++;
+        for (int j=1; j<symbols.size(); j++) {
+          cur_edges.push_back(grammar->edgedict.Convert(symbols[j]));
+        }
+        grammar->ntermdict.Convert(action.substr(7, action.size() - 8));
+        cur_acts.push_back(grammar->adict.Convert(action));
       } else if (line == kSHIFT) {
         cur_acts.push_back(kSHIFT_INT);
         termc++;

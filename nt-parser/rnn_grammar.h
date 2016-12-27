@@ -73,11 +73,13 @@ struct RNNGrammar {
     // compute action2NTindex
     for (unsigned i = 0; i < adict.size(); ++i) {
       const std::string& a = adict.Convert(i);
-      if (a[0] != 'N') continue;
-      size_t start = a.find('(') + 1;
-      size_t end = a.rfind(')');
-      int nt = ntermdict.Convert(a.substr(start, end - start));
-      action2NTindex[i] = nt;
+      // create map of NT and ADJOIN actions to their nonterminal
+      if (a[0] == 'N' || a[0] == 'A') {
+        size_t start = a.find('(') + 1;
+        size_t end = a.rfind(')');
+        int nt = ntermdict.Convert(a.substr(start, end - start));
+        action2NTindex[i] = nt;
+      }
     }
     possible_actions.resize(adict.size());
     for (unsigned i = 0; i < adict.size(); ++i) {
@@ -151,19 +153,8 @@ struct Corpus {
 template<typename Stream> void RNNGrammar::write_tree(Stream &out,
 				     const std::vector<unsigned> &actions,
 				     const Sentence &sentence) {
-  int ti = 0;
-  for (unsigned action: actions) {
-    const std::string &s_action = adict.Convert(action);
-    if (s_action[0] == 'N') {
-      out << '(' << ntermdict.Convert(action2NTindex.find(action)->second)
-	  << ' ';
-    } else if (s_action[0] == 'S') {
-      out << "(XX " << termdict.Convert(sentence.unk[ti++]) << ") ";
-    } else { // REDUCE
-      out << ") ";
-    }
-  }
-  out << endl;
+  std::vector<unsigned> edges;
+  write_tree(out, actions, edges, sentence);
 }
 
 template<typename Stream> void RNNGrammar::write_tree(Stream &out,
@@ -172,24 +163,43 @@ template<typename Stream> void RNNGrammar::write_tree(Stream &out,
 				     const Sentence &sentence) {
   int ti = 0;
   int edge_idx = 0;
+  bool write_edges=true;
   std::vector<std::string> output;
   std::vector<int> stack_content;
   std::vector<int> brackets;
+  if (edges.size() == 0) {
+    write_edges = false;
+  }
   for (unsigned action: actions) {
     const std::string &s_action = adict.Convert(action);
-    if (s_action[0] == 'N') {
+    if (s_action[0] == 'N') { // NT
       brackets.push_back(stack_content.size());
       stack_content.push_back(output.size());
       output.push_back("("+ntermdict.Convert(action2NTindex.find(action)->second));
-    } else if (s_action[0] == 'S') {
+    } else if (s_action[0] == 'S') { // SHIFT
       stack_content.push_back(output.size());
       output.push_back("(XX");
       output.push_back(termdict.Convert(sentence.unk[ti++])+")");
+    } else if (s_action[0] == 'A') { // ADJOIN
+      int stack_limit = brackets.back() + 1;
+      // brackets.back() will point to the inserted phrase bracket
+      if (write_edges) {
+        for (int i = stack_limit; i < stack_content.size(); i++) {
+          output[stack_content[i]] += ":" + edgedict.Convert(edges[edge_idx++]);
+        }
+      }
+      output.insert(output.begin() + stack_content[stack_limit - 1],
+          "("+ntermdict.Convert(action2NTindex.find(action)->second));
+      output.push_back(")");
+      stack_content.resize(stack_limit);
+      stack_content.push_back(stack_content.back()+1);
     } else { // REDUCE
       int stack_limit = brackets.back() + 1;
       brackets.pop_back();
-      for (int i = stack_limit; i < stack_content.size(); i++) {
-        output[stack_content[i]] += ":" + edgedict.Convert(edges[edge_idx++]);
+      if (write_edges) {
+        for (int i = stack_limit; i < stack_content.size(); i++) {
+          output[stack_content[i]] += ":" + edgedict.Convert(edges[edge_idx++]);
+        }
       }
       stack_content.resize(stack_limit);
       output.push_back(")");

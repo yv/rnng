@@ -40,6 +40,7 @@ ParserBuilder::ParserBuilder(
     pretrain_size(gram->get_pretrain_dict().size()),
     pos_size(gram->posdict.size()),
     edges_size(gram->edgedict.size()),
+    compat_version(settings->compat_version),
     implicit_reduce(settings->IMPLICIT_REDUCE_AFTER_SHIFT),
     use_pos(settings->USE_POS),
     use_edges(settings->USE_EDGES),
@@ -125,7 +126,8 @@ bool IsActionForbidden_Discriminative(const string& a, char prev_a,
     bool is_shift = (a[0] == 'S' && a[1]=='H');
     bool is_reduce = (a[0] == 'R' && a[1]=='E');
     bool is_nt = (a[0] == 'N');
-    assert(is_shift || is_reduce || is_nt);
+    bool is_adjoin = (a[0] == 'A');
+    assert(is_shift || is_reduce || is_nt || is_adjoin);
     static const unsigned MAX_OPEN_NTS = 100;
     if (is_nt && nopen_parens > MAX_OPEN_NTS) return true;
     if (ssize == 1) {
@@ -142,12 +144,13 @@ bool IsActionForbidden_Discriminative(const string& a, char prev_a,
     // have fully processed the buffer
     if (nopen_parens == 1 && bsize > 1) {
         if (implicit_reduce && is_shift) return true;
-        if (is_reduce) return true;
+        if (is_reduce || is_adjoin) return true;
     }
 
     // you can't reduce after an NT action
-    if (is_reduce && prev_a == 'N') return true;
-    if (is_nt && bsize == 1) return true;
+    // after an ADJOIN is ok because we already have one daughter
+    if ((is_reduce || is_adjoin) && prev_a == 'N') return true;
+    if ((is_nt || is_adjoin) && bsize == 1) return true;
     if (is_shift && bsize == 1) return true;
     if (is_reduce && ssize < 3) return true;
 
@@ -427,9 +430,15 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
       stack.push_back(nt_embedding);
       stack_lstm.add_input(nt_embedding);
       is_open_paren.push_back(nt_index);
-    } else { // REDUCE
-      --nopen_parens;
-      assert(stack.size() > 2); // dummy symbol means > 2 (not >= 2)
+    } else if (ac == 'A' || ac=='R') { // ADJOIN / REDUCE
+      if (ac == 'A') {
+        assert(stack.size() > 1); // dummy symbol means > 2 (not >= 2)
+        assert(buffer.size() > 1);
+      } else { // REDUCE
+        --nopen_parens;
+        assert(stack.size() > 2); // dummy symbol means > 2 (not >= 2)
+      }
+      // Common to adjoin & reduce: complete nonterminal
       // find what paren we are closing
       int i = is_open_paren.size() - 1;
       while(is_open_paren[i] < 0) { --i; assert(i >= 0); }
@@ -443,14 +452,39 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
 
       // REMOVE EVERYTHING FROM THE STACK THAT IS GOING
       // TO BE COMPOSED INTO A TREE EMBEDDING
-      is_open_paren.pop_back(); // nt symbol
-      stack.pop_back(); // nonterminal dummy
-      stack_lstm.rewind_one_step(); // nt symbol
+      if (compat_version == 0) { //buggy version
+        is_open_paren.pop_back();
+        stack.pop_back();
+        stack_lstm.rewind_one_step();
+      }
       for (i = 0; i < nchildren; ++i) {
         children[i] = stack.back();
         stack.pop_back();
         stack_lstm.rewind_one_step();
         is_open_paren.pop_back();
+      }
+      if (compat_version >= 1) { //fixed version
+        is_open_paren.pop_back(); // nt symbol
+        stack.pop_back(); // nonterminal dummy
+        stack_lstm.rewind_one_step(); // nt symbol
+      }
+
+      if (ac == 'A') { // ADJOIN: put new bracket on the stack
+        auto it = grammar->action2NTindex.find(action);
+        assert(it != grammar->action2NTindex.end());
+        int nt_index = it->second;
+        nt_count++;
+        Expression nt_embedding = lookup(*hg, p_nt, nt_index);
+        stack.push_back(nt_embedding);
+        stack_lstm.add_input(nt_embedding);
+        is_open_paren.push_back(nt_index);
+      }
+
+      if (compat_version >= 1) {
+        stack_summary = stack_lstm.back();
+        if (apply_dropout) {
+          stack_summary = dropout(stack_summary, dropout_amount);
+        }
       }
 
       // BUILD TREE EMBEDDING USING BIDIR LSTM
