@@ -150,9 +150,10 @@ bool IsActionForbidden_Discriminative(const string& a, char prev_a,
     // you can't reduce after an NT action
     // after an ADJOIN is ok because we already have one daughter
     if ((is_reduce || is_adjoin) && prev_a == 'N') return true;
-    if ((is_nt || is_adjoin) && bsize == 1) return true;
+    if (is_nt && bsize == 1) return true;
     if (is_shift && bsize == 1) return true;
-    if (is_reduce && ssize < 3) return true;
+    // marker + [ROOT + some more
+    if ((is_adjoin || is_reduce) && ssize < 3) return true;
 
     // TODO should we control the depth of the parse in some way? i.e., as long as there
     // are items in the buffer, we can do an NT operation, which could cause trouble
@@ -432,8 +433,8 @@ vector<unsigned> ParserBuilder::log_prob_parser(ComputationGraph* hg,
       is_open_paren.push_back(nt_index);
     } else if (ac == 'A' || ac=='R') { // ADJOIN / REDUCE
       if (ac == 'A') {
-        assert(stack.size() > 1); // dummy symbol means > 2 (not >= 2)
-        assert(buffer.size() > 1);
+        assert(stack.size() > 2); // dummy symbol means > 2 (not >= 2)
+        // assert(buffer.size() > 1); // unary reduction at the end, still ok
       } else { // REDUCE
         --nopen_parens;
         assert(stack.size() > 2); // dummy symbol means > 2 (not >= 2)
