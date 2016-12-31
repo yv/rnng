@@ -112,6 +112,8 @@ cdef class RNNG_Parser:
     cdef unordered_map[unsigned, vector[float]] pretrained
     cdef bint use_morph
     cdef readonly object pipelines
+    cdef readonly object features
+    cdef readonly object parens
 
 cdef class SampleWrapper:
     cdef readonly RNNG_Parser parser
