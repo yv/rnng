@@ -1,4 +1,9 @@
 # Recurrent Neural Network Grammars
+
+Note: this is an unofficial fork of the RNNG code by Yannick Versley, which contains a refactored/modularized version of the code, together with a Python wrapper (not based on the DyNet Python module but directly wrapping the C++ parser code), and code to predict grammatical functions/edge labels. This code additionally needs some functionality from the [PyTree](https://bitbucket.org/yannick/pytree) tree transformations library, which replaces the original oracle script.
+
+All of the (scientific and warm fuzzies) credit for the original RNNG implementation belong to Dyer/Kuncoro/Ballesteros/Smith, but please report problems you find in this code to me (Yannick).
+
 Code for the [Recurrent Neural Network Grammars](https://arxiv.org/abs/1602.07776) paper (NAACL 2016), by Chris Dyer, Adhiguna Kuncoro, Miguel Ballesteros, and Noah A. Smith, after the Corrigendum (last two pages on the ArXiv version of the paper). The code is written in C++.
 
 # Citation
@@ -15,13 +20,15 @@ Code for the [Recurrent Neural Network Grammars](https://arxiv.org/abs/1602.0777
  * [Eigen](http://eigen.tuxfamily.org) (latest development release)
  * [CMake](http://www.cmake.org/)
  * [EVALB](http://nlp.cs.nyu.edu/evalb/) (latest version. IMPORTANT: please put the EVALB folder on the same directory as `get_oracle.py` and `sample_input_chinese.txt` to ensure compatibility)
+This version additionally needs
+ * [Cython](http://www.cython.org)
 
 # Build instructions
 Assuming the latest development version of Eigen is stored at: /opt/tools/eigen-dev 
 
     mkdir build
     cd build
-    cmake -DEIGEN3_INCLUDE_DIR=/opt/tools/eigen-dev ..
+    cmake -DEIGEN3_INCLUDE_DIR=/opt/tools/eigen-dev -D..
     make -j2
 
     
@@ -36,6 +43,26 @@ The script to obtain the oracle also converts singletons in the training set and
     python get_oracle.py [training file] [training file] > train.oracle
     python get_oracle.py [training file] [dev file] > dev.oracle
     python get_oracle.py [training file] [test file] > test.oracle
+    
+### Obtaining the oracle for the discriminative model (with edge labels)
+To create oracle files using PyTree, you need several files
+ * train_treebank_pred.txt - automatic predictions in CoNLL 2009 format (normally by running the preprocessing toolchain by crossvalidation)
+ * train_treebank.xml - training treebank in TigerXML (or Negra Export), may contain discontinuities and edge labels
+ * extra_dir/whitelist_min2.txt - a list of all words occurring at least two times in the training corpus
+
+Given a treebank in Negra Export or TigerXML format, run
+```shell
+FILTER=tiger_so,tiger_mark_cc
+# for other languages, use FILTER=''
+pytree_transform --preproc-fmt=conll09 \
+    --preproc=train_treebank_pred.txt \
+    -x $FILTER -U lr --headfn tiger --outfmt rnng_edge \
+    --tokenfilter=unkify/deu/default/whitelist_min2 --extra-dir extra_dir \
+    train_treebank.xml train_treebank.oracle
+    tigertrain.oracle
+```
+
+the same procedure is necessary to create a dev_treebank.oracle file.
 
 ### Obtaining the oracle for the generative model
     python get_oracle_gen.py [training file] [training file] > train_gen.oracle
@@ -50,6 +77,8 @@ On the English PTB dataset the discriminative model typically converges after ab
 ### Training the discriminative model
 
     nohup build/nt-parser/nt-parser --cnn-mem 1700 -x -T [training_oracle_file] -d [dev_oracle_file] -C [original_dev_file (PTB bracketed format, see sample_input_english.txt)] -P -t --pretrained_dim [dimension of pre-trained word embedding] -w [pre-trained word embedding] --lstm_input_dim 128 --hidden_dim 128 -D 0.2 > log.txt
+
+**with edge labels** add the `--use_edge_labels` flag
 
 IMPORTANT: please run the command at the same folder where `remove_dev_unk.py` is located.    
 
