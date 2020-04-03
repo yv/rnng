@@ -50,10 +50,13 @@ cdef extern from "nt-parser/rnn_grammar.h":
         void load_oracle(string fname)
     cdef cppclass c_RNNGrammar "RNNGrammar":
         Dict termdict
+        Dict pretrain_dict
         Dict adict
         Dict ntermdict
         Dict posdict
         Dict edgedict
+        Dict& get_pretrain_dict()
+        bool separate_dicts
         Corpus *load_corpus(string fname, bool split)
         void Freeze()
         void save_to_files(string prefix)

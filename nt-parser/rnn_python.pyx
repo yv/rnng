@@ -3,8 +3,12 @@
 #
 import sys
 import regex
+import os.path
 from pytree.tree import TerminalNode, NontermNode
 from itertools import izip
+
+NEEDED_MEM = 1700
+DONE_INIT = False
 
 cdef class RNNGrammar:
     def __init__(self, split=True):
@@ -12,6 +16,8 @@ cdef class RNNGrammar:
     cpdef RNNG_Corpus load_corpus(self, fname):
         cdef Corpus *corpus
         cdef RNNG_Corpus result
+        if not os.path.exists(fname):
+            raise IOError("Not found: "+fname)
         corpus = self.gram.load_corpus(fname, self.split)
         result = RNNG_Corpus()
         result.corpus = corpus
@@ -105,10 +111,13 @@ s_punct_re = regex.compile(u'[\.\?\!]')
 
 cdef class RNNG_Parser:
     def __init__(self, fname_oracle, fname_model, fname_embeddings,
-                 pipelines, use_morph, use_edges, compat_version=0,
+                 pipelines, use_morph, use_edges, model_settings=None,
                  features=None):
         cdef c_NetworkSettings param
         cdef vector[bool] single
+        cdef bool separate_dicts = False
+        # if CNN is not initialized yet, do it now
+        do_init()
         # actual network parameters are filled from the serialized model
         # but the model needs to be initialized with suitable values
         param.LAYERS = 2
@@ -120,20 +129,31 @@ cdef class RNNG_Parser:
         param.POS_DIM = 10
         param.USE_POS = True
         param.USE_EDGES = use_edges
-        param.compat_version = compat_version
+        param.compat_version = 1
+        if model_settings is not None:
+            if 'compat_version' in model_settings:
+                param.compat_version = model_settings['compat_version']
+            if 'separate_dicts' in model_settings:
+                separate_dicts = model_settings['separate_dicts']
         self.use_morph = use_morph
         self.grammar = RNNGrammar(use_morph)
+        self.grammar.gram.separate_dicts = separate_dicts
         self.grammar.load_corpus(fname_oracle)
-        ReadEmbeddings_word2vec(
-            fname_embeddings,
-            &self.grammar.gram.termdict,
-            &self.pretrained)
+        if fname_embeddings is not None:
+            if not os.path.exists(fname_embeddings):
+                raise IOError('Not found: '+fname_embeddings)
+            ReadEmbeddings_word2vec(
+                fname_embeddings,
+                &self.grammar.gram.get_pretrain_dict(),
+                &self.pretrained)
         self.grammar.Freeze()
         self.model = new c_Model()
         self.parser = new c_ParserBuilder(
             &self.grammar.gram,
             &param, single, self.model,
             &self.pretrained)
+        if not os.path.exists(fname_model):
+            raise IOError('Not found: '+fname_model)
         load_model(self.model[0], fname_model)
         self.pipelines = pipelines
         if features is None:
@@ -180,7 +200,7 @@ cdef class RNNG_Parser:
             s_wu = wu
             s_tag = tag
             id_w = self.grammar.gram.termdict.Convert(s_w)
-            id_wl = self.grammar.gram.termdict.Convert(s_wl)
+            id_wl = self.grammar.gram.get_pretrain_dict().Convert(s_wl)
             id_wu = self.grammar.gram.termdict.Convert(s_wu)
             id_tag = self.grammar.gram.posdict.Convert(s_tag)
             sent.raw.push_back(id_w)
@@ -284,5 +304,15 @@ cdef init(argv=None, int random_seed=0):
     Initialize(argc, c_argv, random_seed)
     free(c_argv)
 
-init(['nt-parser', '--cnn-mem', '1700'])
+def need_memory(k):
+    global NEEDED_MEM
+    if k > NEEDED_MEM:
+        NEEDED_MEM = k
+
+def do_init():
+    global DONE_INIT
+    if DONE_INIT:
+        return
+    init(['nt-parser', '--cnn-mem', str(NEEDED_MEM)])
+    DONE_INIT = True
 
